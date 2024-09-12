@@ -1,0 +1,10 @@
+[package]
+name = "kyomi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+display-info = "0.5.1"
+pollster = "0.3.0"
+wgpu = "22.1.0"
+winit = "0.30.5"
