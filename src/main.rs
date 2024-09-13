@@ -10,7 +10,7 @@ use winit::window::{Window, WindowId};
 
 #[derive(Default)]
 struct App {
-    window: Option<Window>,
+    window: Option<Arc<Window>>,
     // an instance of WGPU API
     instance: Option<Instance>,
     // surface for drawing
@@ -35,7 +35,7 @@ impl ApplicationHandler for App {
             }
         }
 
-        self.window = Some(
+        self.window = Some(Arc::new(
             event_loop
                 .create_window(
                     Window::default_attributes()
@@ -44,7 +44,7 @@ impl ApplicationHandler for App {
                         .with_position(winit::dpi::LogicalPosition::new(x, y)), // .with_transparent(true),
                 )
                 .unwrap(),
-        );
+        ));
 
         self.instance = Some(Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
@@ -55,7 +55,7 @@ impl ApplicationHandler for App {
             self.instance
                 .as_ref()
                 .unwrap()
-                .create_surface(self.window.as_ref().unwrap())
+                .create_surface(self.window.clone().unwrap())
                 .unwrap(),
         );
         let adapter = pollster::block_on(self.instance.as_ref().unwrap().request_adapter(
