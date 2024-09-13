@@ -41,7 +41,8 @@ impl ApplicationHandler for App {
                     Window::default_attributes()
                         // .with_decorations(false)
                         .with_inner_size(winit::dpi::LogicalSize::new(WIDTH, HEIGHT))
-                        .with_position(winit::dpi::LogicalPosition::new(x, y)), // .with_transparent(true),
+                        .with_position(winit::dpi::LogicalPosition::new(x, y))
+                        .with_transparent(true),
                 )
                 .unwrap(),
         ));
@@ -91,11 +92,14 @@ impl ApplicationHandler for App {
                 height: size.height,
                 present_mode: wgpu::PresentMode::Fifo,
                 desired_maximum_frame_latency: 1,
-                // alpha_mode: wgpu::CompositeAlphaMode::PostMultiplied,
-                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+                alpha_mode: wgpu::CompositeAlphaMode::PostMultiplied,
+                // alpha_mode: wgpu::CompositeAlphaMode::Opaque,
                 view_formats: vec![wgpu::TextureFormat::Bgra8UnormSrgb],
             },
         );
+
+        // initial redraw request
+        self.window.as_ref().unwrap().request_redraw();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -132,6 +136,7 @@ impl ApplicationHandler for App {
                 );
 
                 {
+                    println!("render pass");
                     let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("render pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -159,6 +164,7 @@ impl ApplicationHandler for App {
                     .unwrap()
                     .submit(std::iter::once(encoder.finish()));
                 output.present();
+                // println!("{:#?}", &output.texture);
 
                 // self.instance.g
 
@@ -192,7 +198,7 @@ fn main() {
     // ControlFlow::Wait pauses the event loop if no events are available to process.
     // This is ideal for non-game applications that only update in response to user
     // input, and uses significantly less power/CPU time than ControlFlow::Poll.
-    event_loop.set_control_flow(ControlFlow::Wait);
+    // event_loop.set_control_flow(ControlFlow::Wait);
 
     let mut app = App::default();
     let _ = event_loop.run_app(&mut app);
