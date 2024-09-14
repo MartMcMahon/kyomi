@@ -227,6 +227,9 @@ impl ApplicationHandler for App {
             },
         );
 
+        /////// brush stuff
+        let brush = wgpu_text::BrushBuilder::using_font_bytes(font).unwrap();
+
         //// uniform buffer
         self.timer = Some(Timer::new(self.device.as_ref().unwrap()));
 
