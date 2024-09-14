@@ -8,7 +8,7 @@ use winit::application::ApplicationHandler;
 use winit::event::{KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::window::{Window, WindowId, WindowLevel};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -168,7 +168,8 @@ impl ApplicationHandler for App {
                         .with_decorations(false)
                         .with_inner_size(winit::dpi::LogicalSize::new(WIDTH, HEIGHT))
                         .with_position(winit::dpi::LogicalPosition::new(x, y))
-                        .with_transparent(true),
+                        .with_transparent(true)
+                        .with_window_level(WindowLevel::AlwaysOnTop),
                 )
                 .unwrap(),
         ));
@@ -348,15 +349,6 @@ impl ApplicationHandler for App {
                 );
 
                 {
-                    // let color = match self.timer.as_ref() {
-                    //     Some(timer) => wgpu::Color {
-                    //         r: 0
-                    //         g: timer.timer_uniform.t as f64 / 100.0 as f64,
-                    //         b: 0.5,
-                    //         a: 1.0,
-                    //     },
-                    //     None => wgpu::Color::BLUE,
-                    // };
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("render pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
