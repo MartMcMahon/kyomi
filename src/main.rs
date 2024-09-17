@@ -1,9 +1,11 @@
-use std::sync::Arc;
-use std::time::Duration;
-
 use display_info::DisplayInfo;
+use std::alloc::Layout;
+use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use wgpu::{Instance, Surface};
+use wgpu_text::glyph_brush::ab_glyph::FontRef;
+use wgpu_text::glyph_brush::{OwnedSection, Section as TextSection, Text};
+use wgpu_text::TextBrush;
 use winit::application::ApplicationHandler;
 use winit::event::{KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -138,6 +140,9 @@ struct App {
     index_buffer: Option<wgpu::Buffer>,
     timer: Option<Timer>,
 
+    brush: Option<TextBrush<FontRef<'static>>>,
+    text_section: Option<OwnedSection>,
+
     render_pipeline: Option<wgpu::RenderPipeline>,
 }
 
@@ -228,7 +233,25 @@ impl ApplicationHandler for App {
         );
 
         /////// brush stuff
-        let brush = wgpu_text::BrushBuilder::using_font_bytes(font).unwrap();
+        let font = include_bytes!("../fonts/Fira_Code_v6.2/ttf/FiraCode-Light.ttf") as &[u8];
+        self.brush = Some(
+            wgpu_text::BrushBuilder::using_font_bytes(font)
+                .unwrap()
+                .build(self.device.as_ref().unwrap(), WIDTH, HEIGHT, texture_format),
+        );
+
+        self.text_section = Some(
+            TextSection::default()
+                .add_text(Text::new("Hello!").with_color([0.9, 0.5, 0.5, 1.0]))
+                .with_bounds((WIDTH as f32, HEIGHT as f32))
+                .with_layout(
+                    wgpu_text::glyph_brush::Layout::default()
+                        .v_align(wgpu_text::glyph_brush::VerticalAlign::Center),
+                )
+                .with_screen_position((10.0, 10.0))
+                .to_owned(),
+        );
+        ////
 
         //// uniform buffer
         self.timer = Some(Timer::new(self.device.as_ref().unwrap()));
@@ -351,6 +374,16 @@ impl ApplicationHandler for App {
                     },
                 );
 
+                // text-drawing brush
+                match self.brush.as_mut().unwrap().queue(
+                    self.device.as_ref().unwrap(),
+                    self.queue.as_ref().unwrap(),
+                    [self.text_section.as_ref().unwrap()],
+                ) {
+                    Ok(_) => {}
+                    Err(e) => println!("Brush Error: {:?}", e),
+                }
+
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("render pass"),
@@ -380,6 +413,8 @@ impl ApplicationHandler for App {
                         wgpu::IndexFormat::Uint16,
                     ); // 1.
                     render_pass.draw_indexed(0..INDICES.len() as u32, 0, 0..1); // 2.
+
+                    self.brush.as_ref().unwrap().draw(&mut render_pass);
                 }
 
                 // submit will accept anything that implements IntoIter
