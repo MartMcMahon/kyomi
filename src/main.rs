@@ -1,5 +1,5 @@
 use display_info::DisplayInfo;
-use std::alloc::Layout;
+use std::io::Read;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use wgpu::{Instance, Surface};
@@ -11,6 +11,16 @@ use winit::event::{KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId, WindowLevel};
+
+mod spotify;
+
+#[derive(Clone, Debug, Default)]
+struct SpotifyData {
+    pub track_name: String,
+    pub artist_name: String,
+    pub album_name: String,
+    pub album_art_url: String,
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -144,6 +154,8 @@ struct App {
     text_section: Option<OwnedSection>,
 
     render_pipeline: Option<wgpu::RenderPipeline>,
+
+    spotify_data: Option<SpotifyData>,
 }
 
 struct Pipeline {
@@ -242,7 +254,7 @@ impl ApplicationHandler for App {
 
         self.text_section = Some(
             TextSection::default()
-                .add_text(Text::new("Hello!").with_color([0.9, 0.5, 0.5, 1.0]))
+                .add_text(Text::new("Hello!").with_color([0.9, 1.0, 1.0, 1.0]))
                 .with_bounds((WIDTH as f32, HEIGHT as f32))
                 .with_layout(
                     wgpu_text::glyph_brush::Layout::default()
@@ -374,6 +386,31 @@ impl ApplicationHandler for App {
                     },
                 );
 
+                // println!("{:?}", self.spotify_data.clone());
+
+                self.text_section = Some(match &self.spotify_data {
+                    Some(data) => TextSection::default()
+                        .add_text(
+                            Text::new(data.artist_name.as_str()).with_color([0.9, 1.0, 1.0, 1.0]),
+                        )
+                        .with_bounds((WIDTH as f32, HEIGHT as f32))
+                        .with_layout(
+                            wgpu_text::glyph_brush::Layout::default()
+                                .v_align(wgpu_text::glyph_brush::VerticalAlign::Center),
+                        )
+                        .with_screen_position((10.0, 10.0))
+                        .to_owned(),
+                    None => TextSection::default()
+                        .add_text(Text::new("test!").with_color([0.9, 1.0, 1.0, 1.0]))
+                        .with_bounds((WIDTH as f32, HEIGHT as f32))
+                        .with_layout(
+                            wgpu_text::glyph_brush::Layout::default()
+                                .v_align(wgpu_text::glyph_brush::VerticalAlign::Center),
+                        )
+                        .with_screen_position((10.0, 10.0))
+                        .to_owned(),
+                });
+
                 // text-drawing brush
                 match self.brush.as_mut().unwrap().queue(
                     self.device.as_ref().unwrap(),
@@ -450,7 +487,29 @@ impl App {
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
+    // performs auth request
+    let mut spotify = spotify::Spotify::from_client_id(spotify::CLIENT_ID)
+        .with_scope("user-read-private user-read-playback-state user-read-currently-playing")
+        .with_redirect_uri(spotify::REDIRECT_URI);
+    spotify.show_dialog = false;
+
+    let auth_url = spotify.auth_url();
+
+    // the url the user has to go to
+    println!("{}", auth_url);
+
+    // println!("{}", spotify.token().await);
+    spotify.token().await.unwrap();
+    let currently_playing_res = spotify.get_currently_playing().await;
+
+    let mut spotify_data = SpotifyData::default();
+    spotify_data.artist_name = currently_playing_res.unwrap().item.unwrap().album.artists[0]
+        .name
+        .clone();
+
+    println!("{:?}", spotify_data.artist_name.clone());
     let event_loop = EventLoop::new().unwrap();
 
     // ControlFlow::Poll continuously runs the event loop, even if the OS hasn't
@@ -463,5 +522,26 @@ fn main() {
     // event_loop.set_control_flow(ControlFlow::Wait);
 
     let mut app = App::default();
+    app.spotify_data = Some(spotify_data);
     let _ = event_loop.run_app(&mut app);
+}
+
+#[tokio::test]
+async fn test_currently_playing_parsing() {
+    use tokio::io::AsyncReadExt;
+    let mut raw_json = String::new();
+    tokio::fs::File::open("currently_playing.json")
+        .await
+        .unwrap()
+        .read_to_string(&mut raw_json)
+        .await
+        .unwrap();
+
+    println!("{:?}", raw_json);
+
+    let mut spotify_data = SpotifyData::default();
+
+    let res = serde_json::from_str::<spotify::CurrentlyPlayingResponse>(&raw_json).unwrap();
+
+    spotify_data.artist_name = res.item.unwrap().album.artists[0].name.clone();
 }
