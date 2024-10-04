@@ -1,6 +1,12 @@
 use display_info::DisplayInfo;
 use std::io::Read;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tokio::runtime::Runtime;
+use tokio::sync::Mutex;
+use webbrowser;
 use wgpu::util::DeviceExt;
 use wgpu::{Instance, Surface};
 use wgpu_text::glyph_brush::ab_glyph::FontRef;
@@ -496,12 +502,53 @@ async fn main() {
     spotify.show_dialog = false;
 
     let auth_url = spotify.auth_url();
+    // let mut auth_code_buffer = [0; 512];
+    let auth_code = Arc::new(Mutex::new(String::with_capacity(512)));
+    let thread_auth_code = auth_code.clone();
+
+    // create temp http server for OAuth2 loopback
+    let task = tokio::spawn(async move {
+        let listener = TcpListener::bind("localhost:8000").await.unwrap();
+        println!("listening");
+        // loop {
+        if let Ok((mut socket, addr)) = listener.accept().await {
+            println!("new connection from {}", addr.ip());
+            let thread_auth_code = Arc::clone(&thread_auth_code);
+            tokio::spawn(async move {
+                let mut buffer = [0; 512];
+                if let Ok(n) = socket.read(&mut buffer).await {
+                    if n != 0 {
+                        println!("received: {}", String::from_utf8_lossy(&buffer[..n]));
+
+                        let mut auth_code = thread_auth_code.lock().await;
+                        *auth_code = String::from_utf8_lossy(&buffer[..n]).to_string();
+
+                        socket
+                            .write_all(b"hello from tokio server\n")
+                            .await
+                            .unwrap();
+                    } else {
+                        println!("didn't receive any data");
+                        socket.write_all(b"hello anyway!\n").await.unwrap();
+                    }
+                }
+            });
+        }
+        // }
+    });
+
+    println!("outside of loop");
+
+    webbrowser::open(auth_url.as_str()).unwrap();
+    task.await.unwrap();
 
     // the url the user has to go to
-    println!("{}", auth_url);
+    println!("{}", auth_url.clone());
 
-    // println!("{}", spotify.token().await);
-    spotify.token().await.unwrap();
+    spotify
+        .token(auth_code.lock().await.as_ref())
+        .await
+        .unwrap();
     let currently_playing_res = spotify.get_currently_playing().await;
 
     let mut spotify_data = SpotifyData::default();
@@ -510,6 +557,19 @@ async fn main() {
         .clone();
 
     println!("{:?}", spotify_data.artist_name.clone());
+    // spotify_data.artist_name = match currently_playing_res.unwrap().item.unwrap() {
+    //     spotify::PlayableItem::EpisodeObject(_episode) => String::new(),
+    //     spotify::PlayableItem::TrackObject(track) => track.artists[0].name.clone(),
+    // };
+    // spotify_data.artist_name = unsafe { currently_playing_res.iter()
+
+    // let track_object = currently_playing_res.unwrap().item.unwrap();
+    // let s = track_object.artists[0].name.clone();
+
+    // println!("{:?}", s);
+
+    // return;
+
     let event_loop = EventLoop::new().unwrap();
 
     // ControlFlow::Poll continuously runs the event loop, even if the OS hasn't

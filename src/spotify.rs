@@ -96,12 +96,13 @@ impl Spotify {
         }
     }
 
-    pub async fn token(&mut self) -> Result<String, anyhow::Error> {
+    pub async fn token(&mut self, auth_code: &str) -> Result<String, anyhow::Error> {
         let disk_token = self.token_from_disk().await;
         if disk_token.is_ok() && disk_token.as_ref().unwrap().len() > 0 {
             self.token = Some(disk_token.as_ref().unwrap().clone());
             return Ok(disk_token.unwrap());
         }
+
         let url = String::from("https://accounts.spotify.com/api/token");
         let redirect_uri = self.redirect_uri.clone();
         let client = Client::new();
@@ -121,7 +122,7 @@ impl Spotify {
             format!("Basic {}", encoded_auth_str).parse().unwrap(),
         );
         let body = reqwest::Body::from(format!(
-            "grant_type=authorization_code&code={AUTH_CODE}&redirect_uri={redirect_uri}"
+            "grant_type=authorization_code&code={auth_code}&redirect_uri={redirect_uri}"
         ));
 
         let spotify_server_res = client.post(url).headers(headers).body(body).send().await;
@@ -174,6 +175,26 @@ impl Spotify {
 
         Ok(currently_playing_res)
     }
+
+    //         let j: Result<CurrentlyPlayingResponse, anyhow::Error> = match currently_playing_res {
+    //             Ok(res) => {
+    //              res.json().await
+    //             },
+    //             Err(e) => {
+    //                 println!("Server Error: {:?}", e);
+    //                 return anyhow::Result::Err(anyhow::anyhow!("Server Error: {:?}", e));
+    //             }
+    //         };
+    //             match j {
+    //                 Ok(data) {
+    //                     return j;
+    //                 },
+    //                 Err(e) => {
+    //                     return anyhow::Result::Err(anyhow::anyhow!("json parsing error: {:?}", e));
+    //                 }
+    //             }
+}
+
 async fn write_token_to_disk(token: String) {
     let mut f = tokio::fs::File::create("token").await.unwrap();
     f.write_all(token.as_bytes()).await.unwrap();
