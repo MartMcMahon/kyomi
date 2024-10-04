@@ -1,4 +1,5 @@
 use display_info::DisplayInfo;
+use regex::Regex;
 use std::io::Read;
 use std::sync::Arc;
 use std::time::Duration;
@@ -519,9 +520,21 @@ async fn main() {
                 if let Ok(n) = socket.read(&mut buffer).await {
                     if n != 0 {
                         println!("received: {}", String::from_utf8_lossy(&buffer[..n]));
+                        let received_val = String::from_utf8_lossy(&buffer[..n]).to_string();
+                        let re = Regex::new(r"^GET \/\?code=(.*) HTTP").unwrap();
+                        let caps = re.captures(received_val.as_str()).unwrap();
+
+                        // match String::from_utf16_lossy(&buffer[..n]) {
+                        //     "GET /?code="
+                        // }
 
                         let mut auth_code = thread_auth_code.lock().await;
-                        *auth_code = String::from_utf8_lossy(&buffer[..n]).to_string();
+                        println!("captures found:");
+                        for cap in caps.iter() {
+                            println!("{:#?}", cap);
+                        }
+                        *auth_code = caps[1].to_owned();
+                        // String::from_utf8_lossy(&buffer[..n]).to_string();
 
                         socket
                             .write_all(b"hello from tokio server\n")
@@ -542,14 +555,25 @@ async fn main() {
     webbrowser::open(auth_url.as_str()).unwrap();
     task.await.unwrap();
 
-    // the url the user has to go to
-    println!("{}", auth_url.clone());
+    // wait for auth_code
+    loop {
+        if auth_code.lock().await.len() != 0 {
+            break;
+        }
+    }
 
-    spotify
-        .token(auth_code.lock().await.as_ref())
-        .await
-        .unwrap();
+    // println!("auth_code: {:#?}", auth_code.lock().await);
+    spotify.token(&auth_code.lock().await).await.unwrap();
     let currently_playing_res = spotify.get_currently_playing().await;
+
+    // match currently_playing_res {
+    //     Ok(res) => {
+    //         println!("{:?}", res.to_string());
+    //     }
+    //     Err(e) => {
+    //         println!("{:?}", e);
+    //     }
+    // }
 
     let mut spotify_data = SpotifyData::default();
     spotify_data.artist_name = currently_playing_res.unwrap().item.unwrap().album.artists[0]
