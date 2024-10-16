@@ -1,13 +1,23 @@
 use base64::{engine::general_purpose, Engine};
 use reqwest::{Client, Response};
-use serde::Deserialize;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-#[derive(Deserialize)]
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
+
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct TokenResponse {
     access_token: String,
     token_type: String,
     expires_in: i32,
     refresh_token: String,
+    scope: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct RefreshTokenResponse {
+    access_token: String,
+    token_type: String,
+    expires_in: i32,
     scope: String,
 }
 
@@ -31,6 +41,7 @@ pub struct Spotify {
     pub show_dialog: bool, // Optional	Whether or not to force the user to approve the app again if they’ve already done so. If false (default), a user who has already approved the application may be automatically redirected to the URI specified by redirect_uri. If true, the user will not be automatically redirected and will have to approve the app again.
 
     token: Option<String>,
+    token_data: TokenResponse,
 }
 
 impl Spotify {
@@ -43,6 +54,7 @@ impl Spotify {
             scope: None,
             show_dialog: false,
             token: None,
+            token_data: TokenResponse::default(),
         }
     }
 
@@ -81,33 +93,39 @@ impl Spotify {
         base + params.as_str()
     }
 
-    async fn token_from_disk(&mut self) -> Result<String, anyhow::Error> {
+    pub async fn init_token(&mut self) -> Result<String, anyhow::Error> {
+        // check for token on disk
+        self.token_from_disk().await?;
+        println!("accress token on obj is: {}", self.token_data.access_token);
+        // println!("refresh token on obj is: {}", self.token_data.refresh_token);
+        let token_from_refresh = self.refresh_token().await?;
+        Ok(token_from_refresh)
+    }
+
+    pub async fn token_from_disk(&mut self) -> Result<String, anyhow::Error> {
+        println!("token from disk");
         let mut buf = String::new();
         match tokio::fs::File::open("token").await {
             Ok(mut f) => {
-                f.read_to_string(&mut buf).await.unwrap();
-                self.token = Some(buf.clone());
+                println!("reading file");
+                f.read_to_string(&mut buf).await?;
+                println!("buf: ");
+                println!("{buf}");
+                self.token_data = serde_json::from_str(buf.as_str())?;
                 Ok(buf)
             }
             Err(_) => {
-                tokio::fs::File::create("token").await.unwrap();
+                println!("error reading file creating 'token'");
+                tokio::fs::File::create("token").await?;
                 anyhow::Result::Err(anyhow::anyhow!("no token saved"))
             }
         }
     }
 
-    pub async fn token(&mut self, auth_code: &str) -> Result<String, anyhow::Error> {
-        let disk_token = self.token_from_disk().await;
-        if disk_token.is_ok() && disk_token.as_ref().unwrap().len() > 0 {
-            self.token = Some(disk_token.as_ref().unwrap().clone());
-            return Ok(disk_token.unwrap());
-        }
-
+    pub async fn new_token(&mut self, auth_code: &str) -> Result<String, anyhow::Error> {
         let url = String::from("https://accounts.spotify.com/api/token");
         let redirect_uri = self.redirect_uri.clone();
         let client = Client::new();
-
-        // encode client_id and client_secret
 
         let raw_auth_str: Vec<u8> = format!("{}:{}", CLIENT_ID, CLIENT_SECRET).into_bytes();
         let encoded_auth_str = general_purpose::STANDARD.encode(&raw_auth_str);
@@ -139,8 +157,66 @@ impl Spotify {
             Ok(data) => {
                 println!("got token for: {:?}", data.scope);
                 self.token = Some(data.access_token.clone());
-                write_token_to_disk(data.access_token.clone()).await;
+                write_token_data_to_disk(&data).await?;
                 return Ok(data.access_token);
+            }
+            Err(e) => {
+                println!("json parsing error: {:?}", e);
+                return anyhow::Result::Err(anyhow::anyhow!("json parsing error: {:?}", e));
+            }
+        }
+    }
+
+    pub async fn refresh_token(&mut self) -> Result<String, anyhow::Error> {
+        println!("refresh_token");
+        let url = String::from("https://accounts.spotify.com/api/token");
+        let client = Client::new();
+
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "Content-Type",
+            "application/x-www-form-urlencoded".parse().unwrap(),
+        );
+        headers.insert(
+            "Authorization",
+            format!(
+                "Basic {}",
+                general_purpose::STANDARD.encode(format!("{}:{}", CLIENT_ID, CLIENT_SECRET))
+            )
+            .parse()
+            .unwrap(),
+        );
+        let refresh_token = &self.token_data.refresh_token;
+        let client_id = &self.client_id;
+        let body = reqwest::Body::from(format!(
+            "grant_type=refresh_token&refresh_token={refresh_token}&client_id={client_id}"
+        ));
+        let spotify_server_res = client.post(url).headers(headers).body(body).send().await;
+
+        let j: Result<RefreshTokenResponse, reqwest::Error> = match spotify_server_res {
+            Ok(res) => {
+                // println!("refresh_token response: {:?}", res);
+                // let t = &res.text().await;
+                // println!("text response: {:?}", t);
+                let r = res.json::<RefreshTokenResponse>().await;
+                r
+                // Ok(TokenResponse::default())
+            }
+            Err(e) => {
+                println!("token refresh network error: {:?}", e);
+                return anyhow::Result::Err(anyhow::anyhow!(
+                    "token refresh network error: {:?}",
+                    e
+                ));
+            }
+        };
+
+        match j {
+            Ok(data) => {
+                println!("got refresh token");
+                self.token_data.access_token = data.clone().access_token;
+                write_token_data_to_disk(&self.token_data).await?;
+                return Ok(self.token_data.access_token.clone());
             }
             Err(e) => {
                 println!("json parsing error: {:?}", e);
@@ -153,14 +229,14 @@ impl Spotify {
         let url = "https://api.spotify.com/v1/me/player/currently-playing";
         let client = Client::new();
 
-        let raw_auth_str: Vec<u8> = format!("{}:{}", CLIENT_ID, CLIENT_SECRET).into_bytes();
-        let encoded_auth_str = general_purpose::STANDARD.encode(&raw_auth_str);
+        // let raw_auth_str: Vec<u8> = format!("{}:{}", CLIENT_ID, CLIENT_SECRET).into_bytes();
+        // let encoded_auth_str = general_purpose::STANDARD.encode(&raw_auth_str);
         let mut headers = reqwest::header::HeaderMap::new();
         // headers.insert("Content-Type",
         //     "application/x-www-form-urlencoded".parse().unwrap(),);
         headers.insert(
             "Authorization",
-            format!("Bearer {}", self.token.clone().unwrap())
+            format!("Bearer {}", self.token_data.access_token.clone())
                 .parse()
                 .unwrap(),
         );
@@ -195,9 +271,17 @@ impl Spotify {
     //             }
 }
 
-async fn write_token_to_disk(token: String) {
-    let mut f = tokio::fs::File::create("token").await.unwrap();
-    f.write_all(token.as_bytes()).await.unwrap();
+async fn write_token_data_to_disk(token: &TokenResponse) -> anyhow::Result<()> {
+    println!("creating file");
+    let f = tokio::fs::File::create("token").await.unwrap();
+    println!("json'ing token_data");
+    let data = serde_json::to_vec(&token).unwrap();
+    let mut writer = BufWriter::new(f);
+    println!("writing");
+    writer.write_all(&data).await?;
+    println!("flushing");
+    writer.flush().await?;
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -237,6 +321,12 @@ pub struct CurrentlyPlayingResponse {
     // could ALSO be an EpisodeObject maybe?
     pub item: Option<Item>,
     currently_playing_type: CurrentlyPlayingType,
+}
+
+impl CurrentlyPlayingResponse {
+    pub fn to_string(&self) -> String {
+        format!("{}", self.is_playing)
+    }
 }
 
 #[derive(Deserialize)]

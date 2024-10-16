@@ -1,11 +1,8 @@
 use display_info::DisplayInfo;
 use regex::Regex;
-use std::io::Read;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 use webbrowser;
 use wgpu::util::DeviceExt;
@@ -494,19 +491,9 @@ impl App {
     }
 }
 
-#[tokio::main]
-async fn main() {
-    // performs auth request
-    let mut spotify = spotify::Spotify::from_client_id(spotify::CLIENT_ID)
-        .with_scope("user-read-private user-read-playback-state user-read-currently-playing")
-        .with_redirect_uri(spotify::REDIRECT_URI);
-    spotify.show_dialog = false;
-
-    let auth_url = spotify.auth_url();
-    // let mut auth_code_buffer = [0; 512];
-    let auth_code = Arc::new(Mutex::new(String::with_capacity(512)));
-    let thread_auth_code = auth_code.clone();
-
+async fn blocking_oauth_server(
+    thread_auth_code: Arc<Mutex<String>>,
+) -> tokio::task::JoinHandle<()> {
     // create temp http server for OAuth2 loopback
     let task = tokio::spawn(async move {
         let listener = TcpListener::bind("localhost:8000").await.unwrap();
@@ -524,15 +511,11 @@ async fn main() {
                         let re = Regex::new(r"^GET \/\?code=(.*) HTTP").unwrap();
                         let caps = re.captures(received_val.as_str()).unwrap();
 
-                        // match String::from_utf16_lossy(&buffer[..n]) {
-                        //     "GET /?code="
-                        // }
-
                         let mut auth_code = thread_auth_code.lock().await;
-                        println!("captures found:");
-                        for cap in caps.iter() {
-                            println!("{:#?}", cap);
-                        }
+                        // println!("captures found:");
+                        // // for cap in caps.iter() {
+                        // //     println!("{:#?}", cap);
+                        // }
                         *auth_code = caps[1].to_owned();
                         // String::from_utf8_lossy(&buffer[..n]).to_string();
 
@@ -549,38 +532,60 @@ async fn main() {
         }
         // }
     });
+    return task;
+}
 
-    println!("outside of loop");
+#[tokio::main]
+async fn main() {
+    // init spotify object
+    let mut spotify = spotify::Spotify::from_client_id(spotify::CLIENT_ID)
+        .with_scope("user-read-private user-read-playback-state user-read-currently-playing")
+        .with_redirect_uri(spotify::REDIRECT_URI);
+    spotify.show_dialog = false;
 
-    webbrowser::open(auth_url.as_str()).unwrap();
-    task.await.unwrap();
+    // init token
+    println!("init token");
+    let token = &spotify.init_token().await;
+    if let Err(e) = token {
+        // if token.is_err() {
+        println!("error getting token: {:?}", e);
+        println!("requesting new one");
 
-    // wait for auth_code
-    loop {
-        if auth_code.lock().await.len() != 0 {
-            break;
+        let auth_url = &spotify.auth_url();
+        let auth_code = Arc::new(Mutex::new(String::with_capacity(512)));
+
+        let task = blocking_oauth_server(auth_code.clone()).await;
+        webbrowser::open(auth_url.as_str()).unwrap();
+        task.await.unwrap();
+
+        // wait for auth_code
+        loop {
+            if auth_code.lock().await.len() != 0 {
+                break;
+            }
         }
+        // let token =
+        spotify.new_token(&auth_code.lock().await).await.unwrap();
+        // &token.clone()
     }
 
-    // println!("auth_code: {:#?}", auth_code.lock().await);
-    spotify.token(&auth_code.lock().await).await.unwrap();
     let currently_playing_res = spotify.get_currently_playing().await;
 
-    // match currently_playing_res {
-    //     Ok(res) => {
-    //         println!("{:?}", res.to_string());
-    //     }
-    //     Err(e) => {
-    //         println!("{:?}", e);
-    //     }
-    // }
+    match &currently_playing_res {
+        Ok(res) => {
+            println!("{:?}", res.to_string());
+        }
+        Err(e) => {
+            println!("{:?}", e);
+        }
+    }
 
     let mut spotify_data = SpotifyData::default();
     spotify_data.artist_name = currently_playing_res.unwrap().item.unwrap().album.artists[0]
         .name
         .clone();
 
-    println!("{:?}", spotify_data.artist_name.clone());
+    // println!("{:?}", spotify_data.artist_name.clone());
     // spotify_data.artist_name = match currently_playing_res.unwrap().item.unwrap() {
     //     spotify::PlayableItem::EpisodeObject(_episode) => String::new(),
     //     spotify::PlayableItem::TrackObject(track) => track.artists[0].name.clone(),
